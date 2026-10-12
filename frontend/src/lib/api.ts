@@ -1,4 +1,7 @@
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "");
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000")
+  .trim()
+  .replace(/\s+copy\s+url$/i, "")
+  .replace(/\/+$/, "");
 
 export type Sentiment = "positive" | "mixed" | "negative";
 
