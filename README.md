@@ -2,6 +2,8 @@
 
 Turn raw customer feedback into clear priorities. InsightFlow reads every review, groups the ones that say the same thing, shows how sentiment changes over time, and ranks which problem to fix first, with the reasons spelled out.
 
+**Live Application:** [Open InsightFlow Live](https://insight-flow-q5dmoofic-ansaryanraj.vercel.app/)
+
 Built for Frontend Arena Build Battle 2026 (AI x Web Development).
 
 ## What it does
