@@ -27,11 +27,11 @@ import threading
 import time
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from . import config
 from .analysis import analyze_rules, normalize, text_hash
-from .db import Analysis, Feedback, SessionLocal
+from .db import Analysis, Feedback, SessionLocal, utcnow
 from .taxonomy import ALL_TOPICS
 
 log = logging.getLogger(__name__)
@@ -63,7 +63,7 @@ def read_state() -> dict:
 
 
 def _write_state(**kw) -> dict:
-    state = {**read_state(), **kw, "updated_at": datetime.utcnow().isoformat()}
+    state = {**read_state(), **kw, "updated_at": utcnow().isoformat()}
     config.ADAPTION_STATE_FILE.write_text(json.dumps(state, indent=2, default=str))
     return state
 
@@ -77,22 +77,40 @@ def cached_results() -> dict:
     return {}
 
 
+def active_adaption_count() -> int:
+    try:
+        with SessionLocal() as db:
+            return db.scalar(select(func.count(Analysis.text_hash)).where(Analysis.engine == "adaption")) or 0
+    except Exception:
+        return 0
+
+
 def status() -> dict:
     cache = cached_results()
     state = read_state()
+    is_running = state.get("status") == "running" or _lock.locked()
+    results = cache.get("results", [])
+    enriched_count = len([r for r in results if r.get("engine") == "adaption"])
+    fallback_count = len([r for r in results if r.get("engine") != "adaption"])
+    db_applied = active_adaption_count()
+
     return {
         "configured": configured(),
+        "is_active": is_running,
         "state": state,
         "cached": {
-            "available": bool(cache.get("results")),
+            "available": bool(results),
             "dataset_id": cache.get("dataset_id"),
             "created_at": cache.get("created_at"),
-            "enriched": len(cache.get("results", [])),
+            "applied_at": cache.get("applied_at") or state.get("finished_at"),
+            "enriched": enriched_count,
+            "fallback_count": fallback_count,
+            "db_applied": db_applied,
             "evaluation": cache.get("evaluation"),
             "estimate": cache.get("estimate"),
         },
         "blueprint": BLUEPRINT,
-        "mode": "adaption" if cache.get("results") else ("ready" if configured() else "local"),
+        "mode": "adaption" if db_applied > 0 else ("ready" if configured() else "local"),
     }
 
 
@@ -156,7 +174,7 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
         from adaption import Adaption
 
         client = Adaption(api_key=config.ADAPTION_API_KEY)
-        _write_state(status="running", step="Collecting unique reviews", started_at=datetime.utcnow().isoformat(),
+        _write_state(status="running", step="Collecting unique reviews", started_at=utcnow().isoformat(),
                      error=None)
 
         with SessionLocal() as db:
@@ -247,9 +265,11 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
             seen.add(h)
             results.append({"text_hash": h, "text": review, **merged})
 
+        now_iso = utcnow().isoformat()
         payload = {
             "dataset_id": dataset_id,
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": now_iso,
+            "applied_at": now_iso,
             "evaluation": evaluation,
             "estimate": estimate,
             "rows_sent": len(texts),
@@ -261,7 +281,7 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
         }
         config.ADAPTION_RESULTS_FILE.write_text(json.dumps(payload, indent=2))
         applied = apply_cached_results()
-        _write_state(status="succeeded", step="Done", finished_at=datetime.utcnow().isoformat(),
+        _write_state(status="succeeded", step="Done", finished_at=utcnow().isoformat(),
                      evaluation=evaluation, enriched=applied)
         return payload
     except Exception as exc:
@@ -289,6 +309,12 @@ def apply_cached_results() -> int:
             a.summary, a.engine, a.safety_flags = r.get("summary", ""), "adaption", r.get("safety_flags", [])
             applied += 1
         db.commit()
+    if applied > 0 and config.ADAPTION_RESULTS_FILE.exists():
+        try:
+            cache["applied_at"] = utcnow().isoformat()
+            config.ADAPTION_RESULTS_FILE.write_text(json.dumps(cache, indent=2))
+        except Exception:
+            pass
     return applied
 
 

@@ -9,6 +9,7 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from .db import utcnow
 from .taxonomy import ALL_TOPICS
 
 _cache: dict = {"version": -1, "frame": None}
@@ -305,7 +306,7 @@ def report_payload(db: Session, f: Filters, issues: list[dict]) -> dict:
     pr = priorities(db, f)
     tp = topics(db, f)
     return {
-        "generated_at": datetime.utcnow().isoformat(),
+        "generated_at": utcnow().isoformat(),
         "filters": f.__dict__,
         "summary": executive_summary(ov, pr),
         "overview": ov,

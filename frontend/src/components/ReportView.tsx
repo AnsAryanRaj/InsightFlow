@@ -71,31 +71,40 @@ export default function ReportView({ title, payload }: { title: string; payload:
         <section className="print-break">
           <h2 className="display text-3xl">What to fix first</h2>
           <p className="mt-2 text-ink-soft">Ranked by volume, negativity, severity and growth.</p>
-          <ol className="mt-6 divide-y divide-rule border-y border-rule">
-            {payload.priorities.map((p) => (
-              <li key={p.topic} className="grid gap-4 py-6 md:grid-cols-[70px_1fr]">
-                <span className="display num text-5xl text-cobalt">{p.rank}</span>
-                <div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <h3 className="display text-2xl">{p.label}</h3>
-                    <TierBadge tier={p.tier} />
-                    <span className="num text-sm text-ink-soft">Score {p.score}</span>
+          {payload.priorities.length > 0 ? (
+            <ol className="mt-6 divide-y divide-rule border-y border-rule">
+              {payload.priorities.map((p) => (
+                <li key={p.topic} className="grid gap-4 py-6 md:grid-cols-[70px_1fr]">
+                  <span className="display num text-5xl text-cobalt">{p.rank}</span>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      <h3 className="display text-2xl">{p.label}</h3>
+                      <TierBadge tier={p.tier} />
+                      <span className="num text-sm text-ink-soft">Score {p.score}</span>
+                    </div>
+                    <p className="mt-2 text-sm text-ink-soft">
+                      {fmt.format(p.count)} reports, {pct(p.share_of_complaints)} of complaints, severity {p.avg_severity.toFixed(1)} of 5.
+                      Owner: {p.owner}.
+                    </p>
+                    {p.reasons?.[2] && <p className="mt-3 leading-relaxed">{p.reasons[2]}</p>}
+                    <p className="mt-3 font-semibold">Recommended actions</p>
+                    <ul className="mt-1 list-disc space-y-1 pl-5 leading-relaxed">
+                      {p.actions.map((a) => (
+                        <li key={a}>{a}</li>
+                      ))}
+                    </ul>
                   </div>
-                  <p className="mt-2 text-sm text-ink-soft">
-                    {fmt.format(p.count)} reports, {pct(p.share_of_complaints)} of complaints, severity {p.avg_severity.toFixed(1)} of 5.
-                    Owner: {p.owner}.
-                  </p>
-                  <p className="mt-3 leading-relaxed">{p.reasons[2]}</p>
-                  <p className="mt-3 font-semibold">Recommended actions</p>
-                  <ul className="mt-1 list-disc space-y-1 pl-5 leading-relaxed">
-                    {p.actions.map((a) => (
-                      <li key={a}>{a}</li>
-                    ))}
-                  </ul>
-                </div>
-              </li>
-            ))}
-          </ol>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <div className="mt-6 rounded-2xl bg-paper-deep/60 p-6 text-ink-soft">
+              <p className="font-semibold text-ink">No high-priority complaints in this report scope.</p>
+              <p className="mt-1 text-sm">
+                Feedback under the selected categories or date range contains no critical complaint patterns.
+              </p>
+            </div>
+          )}
         </section>
 
         {payload.praise.length > 0 && (

@@ -35,22 +35,74 @@ Rules: "mixed" means a complaint the business partly fixed. Severity is 0 for pr
 - Its quality evaluation gives the business a grade for its own feedback data, shown on the Insights page.
 - Safety screening flags abusive reviews without deleting them.
 
-## Running it
+## Setup and Configuration
 
-From the app: Insights page, then "Get estimate" and "Run enrichment" (needs `ADAPTION_API_KEY` on the backend).
+1. **Obtain an Adaption API Key** from the Adaption dashboard.
+2. **Set the key exclusively in backend environment configuration:**
+   - **Local development:** Add `ADAPTION_API_KEY=your_key_here` to `backend/.env`.
+   - **Render deployment:** Under service `insightflow-api` > Environment Variables, add `ADAPTION_API_KEY`.
+   - *Never commit API keys to Git or expose them in client-side code.*
 
-From the command line:
+## Running the Pipeline
 
+### Option A: From the Web UI
+1. Navigate to the **Insights** page (`/insights`).
+2. If `ADAPTION_API_KEY` is not set, the panel clearly indicates **"Running on local rules"** mode.
+3. Once configured, click **"Get estimate"** to query Adaption for estimated credits and minutes without being charged.
+4. Click **"Run enrichment"** to launch the asynchronous background job.
+5. The UI polls `/api/adaption` every 3 seconds to report live progress (`Uploading`, `Adapting`, `Evaluating`, `Done`).
+6. Upon completion, new quality grades and enrichment counts appear instantly, and the page metrics refresh automatically.
+
+### Option B: From the Command Line
 ```bash
 cd backend
-export ADAPTION_API_KEY=...
-python -m scripts.run_adaption --estimate    # price only, nothing charged
-python -m scripts.run_adaption --max-rows 50 # small trial
-python -m scripts.run_adaption               # every unique review
+
+# On Linux/macOS:
+export ADAPTION_API_KEY=your_key_here
+# On Windows PowerShell:
+$env:ADAPTION_API_KEY="your_key_here"
+
+# 1. Pre-flight price and time estimate (no credits billed):
+python -m scripts.run_adaption --estimate
+
+# 2. Small trial batch (e.g., first 50 unique reviews):
+python -m scripts.run_adaption --max-rows 50
+
+# 3. Full run (all 320 unique reviews):
+python -m scripts.run_adaption
 ```
 
-Results are cached in `backend/data/adaption_results.json`. Commit that file and the deployed app shows Adaption results immediately, even if the API is slow or out of credits during the demo.
+## Expected Duration & Limitations
 
-## Code
+- **Deduplication efficiency:** The 7,000 feedback rows are deduplicated down to 320 unique review texts before uploading. Only 320 prompt rows are billed and processed.
+- **Duration:** Typically **2 to 5 minutes** for the 320-row dataset depending on remote queue depth.
+- **Timeouts:** The pipeline sets a 60-minute wait timeout (`wait_for_completion(timeout=3600)`) and a 10-minute evaluation timeout (`wait_for_evaluation(timeout=600)`).
+- **Concurrency control:** An in-process thread lock prevents competing simultaneous runs.
 
-`backend/app/adaption_pipeline.py`
+## Verification of Results
+
+1. **Cache File Generated:** Results are persisted to `backend/data/adaption_results.json` containing:
+   - `dataset_id`: Adaption dataset ID.
+   - `created_at` and `applied_at`: Timestamps.
+   - `evaluation`: Pre- and post-adaptation data quality scores and letter grades.
+   - `results`: Array of per-review structured analyses with `engine: "adaption"`.
+2. **Database Updated:** Each unique review's record in the SQLite `analysis` table is updated with `engine = "adaption"`.
+3. **UI Verification:**
+   - On the **Insights** page, the panel displays the exact number of enriched reviews, quality grades before/after, and percentage improvement.
+   - On the **Feedback** explorer, items analyzed by Adaption display the tag `read by adaption`.
+   - On the **Dashboard**, the "Analysis engines" count in executive reports includes Adaption.
+
+## Safe Fallback Behavior
+
+- **Missing Key:** If `ADAPTION_API_KEY` is omitted, InsightFlow operates in 100% offline local mode using rule-based taxonomy and VADER sentiment. No features crash.
+- **Parsing / Network Failures:** If an individual completion cannot be parsed as JSON, the pipeline falls back to rule-based analysis for that item, ensuring zero data loss.
+- **Evaluation Unavailable:** Data quality evaluation is treated as a bonus and never fails an otherwise successful run.
+- **Idempotent Caching:** Once `backend/data/adaption_results.json` exists, the backend reloads and applies it on startup without needing to re-bill credits.
+
+## Code References
+
+- Pipeline logic: [`backend/app/adaption_pipeline.py`](backend/app/adaption_pipeline.py)
+- REST API routes: [`backend/app/main.py`](backend/app/main.py)
+- CLI runner: [`backend/scripts/run_adaption.py`](backend/scripts/run_adaption.py)
+- Insights UI panel: [`frontend/src/components/AdaptionPanel.tsx`](frontend/src/components/AdaptionPanel.tsx)
+

@@ -18,11 +18,11 @@ export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
   const { data, reload } = useApi<AdaptionStatus>("/api/adaption");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const running = data?.state.status === "running";
+  const running = data?.state.status === "running" || data?.is_active === true;
 
   useEffect(() => {
     if (!running) return;
-    const t = setInterval(reload, 4000);
+    const t = setInterval(reload, 3000);
     return () => clearInterval(t);
   }, [running, reload]);
 
@@ -74,10 +74,18 @@ export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
               <>
                 <p className="text-sm text-cream/75">
                   Last run {data.cached.created_at ? relative(data.cached.created_at) : ""}
+                  {data.cached.applied_at && data.cached.applied_at !== data.cached.created_at && (
+                    <span> · Applied {relative(data.cached.applied_at)}</span>
+                  )}
                 </p>
                 <p className="display mt-1 text-3xl">
                   {fmt.format(data.cached.enriched)} reviews enriched
                 </p>
+                {data.cached.fallback_count ? (
+                  <p className="mt-1 text-xs text-cream/70">
+                    {fmt.format(data.cached.fallback_count)} items preserved on local rules fallback
+                  </p>
+                ) : null}
                 {ev && (ev.grade_before || ev.grade_after) ? (
                   <dl className="mt-5 grid grid-cols-3 gap-4">
                     <div>

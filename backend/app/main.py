@@ -379,3 +379,10 @@ def adaption_run(body: AdaptionRunIn):
         raise HTTPException(409, "An Adaption run is already in progress.")
     adaption_pipeline.start_background(max_rows=body.max_rows, estimate_only=body.estimate_only)
     return {"started": True}
+
+
+@app.post("/api/adaption/apply")
+def adaption_apply():
+    applied = adaption_pipeline.apply_cached_results()
+    insights.bump()
+    return {"applied": applied, "status": adaption_pipeline.status()}

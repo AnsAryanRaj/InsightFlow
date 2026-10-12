@@ -21,13 +21,35 @@ export default function FeedbackPage() {
   const pathname = usePathname();
   const page = Number(params.get("page") ?? 1);
   const group = params.get("group") === "1";
-  const sort = params.get("sort") ?? (group ? "repeats" : "newest");
+  const rawSort = params.get("sort");
+  const sort = group
+    ? (rawSort === "repeats" || rawSort === "newest" ? rawSort : "repeats")
+    : (rawSort === "newest" || rawSort === "oldest" || rawSort === "severity" ? rawSort : "newest");
 
   const setParam = (k: string, v: string | null) => {
     const next = new URLSearchParams(params.toString());
     if (v) next.set(k, v);
     else next.delete(k);
     if (k !== "page") next.delete("page");
+    router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+  };
+
+  const toggleGroup = () => {
+    const next = new URLSearchParams(params.toString());
+    if (group) {
+      next.delete("group");
+      next.delete("page");
+      if (next.get("sort") === "repeats") {
+        next.set("sort", "newest");
+      }
+    } else {
+      next.set("group", "1");
+      next.delete("page");
+      const cur = next.get("sort");
+      if (cur === "oldest" || cur === "severity") {
+        next.set("sort", "repeats");
+      }
+    }
     router.replace(`${pathname}?${next.toString()}`, { scroll: false });
   };
 
@@ -130,7 +152,7 @@ export default function FeedbackPage() {
         <div className="flex items-center gap-3 text-sm">
           <button
             type="button"
-            onClick={() => setParam("group", group ? null : "1")}
+            onClick={toggleGroup}
             aria-pressed={group}
             className={`inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 ${
               group ? "border-cobalt bg-cobalt text-cream" : "border-ink/20 hover:border-ink/50"

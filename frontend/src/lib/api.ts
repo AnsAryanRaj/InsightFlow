@@ -135,6 +135,7 @@ export type ImportHealth = {
 
 export type AdaptionStatus = {
   configured: boolean;
+  is_active?: boolean;
   mode: "adaption" | "ready" | "local";
   blueprint: string;
   state: { status: string; step?: string; error?: string | null; dataset_id?: string; estimate?: { credits: number; minutes: number } };
@@ -142,7 +143,10 @@ export type AdaptionStatus = {
     available: boolean;
     dataset_id: string | null;
     created_at: string | null;
+    applied_at?: string | null;
     enriched: number;
+    fallback_count?: number;
+    db_applied?: number;
     evaluation: null | {
       status?: string;
       grade_before?: string | null;
