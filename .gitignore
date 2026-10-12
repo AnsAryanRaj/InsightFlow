@@ -1,0 +1,11 @@
+node_modules/
+.next/
+out/
+.env
+.env.local
+__pycache__/
+*.pyc
+.venv/
+backend/data/insightflow.db
+backend/data/adaption_state.json
+.DS_Store
