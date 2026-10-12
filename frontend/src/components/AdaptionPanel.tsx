@@ -16,8 +16,10 @@ const STEPS = [
 
 export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
   const { data, reload } = useApi<AdaptionStatus>("/api/adaption");
-  const [busy, setBusy] = useState(false);
+  const [estimating, setEstimating] = useState(false);
+  const [enriching, setEnriching] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const busy = estimating || enriching;
   const running = data?.state.status === "running" || data?.is_active === true;
 
   useEffect(() => {
@@ -31,7 +33,8 @@ export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
   }, [data?.state.status, onDone]);
 
   async function run(estimateOnly: boolean) {
-    setBusy(true);
+    if (estimateOnly) setEstimating(true);
+    else setEnriching(true);
     setError(null);
     try {
       await api("/api/adaption/run", { method: "POST", body: JSON.stringify({ estimate_only: estimateOnly }) });
@@ -39,7 +42,8 @@ export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
     } catch (e) {
       setError((e as Error).message);
     } finally {
-      setBusy(false);
+      if (estimateOnly) setEstimating(false);
+      else setEnriching(false);
     }
   }
 
@@ -156,12 +160,12 @@ export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
                 Estimate: about {fmt.format(Math.round(est.credits))} credits and {Math.ceil(est.minutes)} minutes.
               </p>
             )}
-            {data?.configured && (
+            {data && (
               <div className="on-cobalt mt-5 flex flex-wrap gap-3">
-                <Button variant="cream" onClick={() => run(true)} busy={busy} disabled={running}>
-                  Get estimate
+                <Button variant="cream" onClick={() => run(true)} busy={estimating} disabled={running || busy}>
+                  Run estimate
                 </Button>
-                <Button variant="ghost" className="text-cream ring-1 ring-cream/50 hover:bg-cream/10" onClick={() => run(false)} disabled={running || busy}>
+                <Button variant="ghost" className="text-cream ring-1 ring-cream/50 hover:bg-cream/10" onClick={() => run(false)} busy={enriching} disabled={running || busy}>
                   {data.cached.available ? "Run again" : "Run enrichment"}
                 </Button>
               </div>
