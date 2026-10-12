@@ -155,3 +155,34 @@ def test_adaption_self_healing_and_reset():
     after_reset = client.get("/api/adaption").json()
     assert after_reset["is_active"] is False
     assert after_reset["state"]["status"] == "idle"
+
+
+def test_adaption_error_cause_and_redaction(monkeypatch):
+    from app import adaption_pipeline, config
+
+    test_key = "test_secret_key_12345"
+    monkeypatch.setattr(config, "ADAPTION_API_KEY", test_key)
+
+    class MockDatasets:
+        def upload_file(self, *args, **kwargs):
+            cause = Exception(f"Illegal header value Bearer {test_key}")
+            exc = RuntimeError("Connection error.")
+            exc.__cause__ = cause
+            raise exc
+
+    class MockClient:
+        datasets = MockDatasets()
+
+    monkeypatch.setattr("adaption.Adaption", lambda **kw: MockClient())
+
+    with pytest.raises(RuntimeError):
+        adaption_pipeline.run_pipeline(estimate_only=True)
+
+    state = adaption_pipeline.read_state()
+    assert state["status"] == "failed"
+    assert "Connection error." in state["error"]
+    assert test_key not in state["error"]
+    assert "[REDACTED]" in state["error"]
+    assert "Illegal header value" in state["error"]
+    adaption_pipeline.reset_state()
+

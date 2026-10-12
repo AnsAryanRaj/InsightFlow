@@ -22,6 +22,7 @@ import csv
 import io
 import json
 import logging
+import re
 import tempfile
 import threading
 import time
@@ -342,9 +343,12 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
         return payload
     except Exception as exc:
         log.exception("Adaption pipeline failed")
-        err_msg = str(exc)
+        cause = getattr(exc, "__cause__", None)
+        cause_detail = f" ({type(cause).__name__}: {cause})" if cause else ""
+        err_msg = f"{exc}{cause_detail}"
         if config.ADAPTION_API_KEY and config.ADAPTION_API_KEY in err_msg:
             err_msg = err_msg.replace(config.ADAPTION_API_KEY, "[REDACTED]")
+        err_msg = re.sub(r"Bearer\s+['\"]?([A-Za-z0-9_\-\.]+)", "Bearer [REDACTED]", err_msg)
         _write_state(status="failed", step="Failed", error=err_msg[:400])
         raise
     finally:

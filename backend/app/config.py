@@ -27,8 +27,8 @@ SAMPLE_CSV = BASE_DIR / "data" / "sample_feedback.csv"
 ADAPTION_STATE_FILE = DATA_DIR / "adaption_state.json"
 ADAPTION_RESULTS_FILE = BASE_DIR / "data" / "adaption_results.json"
 
-ADAPTION_API_KEY = os.getenv("ADAPTION_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ADAPTION_API_KEY = os.getenv("ADAPTION_API_KEY", "").strip().strip('"').strip("'")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip().strip('"').strip("'")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5")
 
 # Comma separated list of allowed frontend origins for CORS
