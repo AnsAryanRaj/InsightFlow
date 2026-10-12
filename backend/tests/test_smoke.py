@@ -128,3 +128,30 @@ def test_csv_exports():
     assert res_fb.status_code == 200
     assert "text/csv" in res_fb.headers.get("content-type", "")
     assert b"id,created_at,category" in res_fb.content
+
+
+def test_adaption_self_healing_and_reset():
+    from app import adaption_pipeline
+    import json
+
+    # Simulate an orphaned "running" state left by an interrupted process
+    adaption_pipeline._write_state(status="running", step="Simulated orphaned step")
+
+    # 1. GET /api/adaption must detect orphaned thread, heal state to failed, and report is_active=False
+    res = client.get("/api/adaption")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["is_active"] is False
+    assert data["state"]["status"] == "failed"
+    assert "interrupted" in data["state"]["error"].lower()
+
+    # 2. POST /api/adaption/reset resets state back to idle
+    reset_res = client.post("/api/adaption/reset")
+    assert reset_res.status_code == 200
+    assert reset_res.json()["ok"] is True
+    assert reset_res.json()["state"]["status"] == "idle"
+
+    # 3. GET /api/adaption confirms idle status
+    after_reset = client.get("/api/adaption").json()
+    assert after_reset["is_active"] is False
+    assert after_reset["state"]["status"] == "idle"

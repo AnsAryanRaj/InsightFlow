@@ -375,10 +375,18 @@ def adaption_status():
 def adaption_run(body: AdaptionRunIn):
     if not adaption_pipeline.configured():
         raise HTTPException(400, "Add ADAPTION_API_KEY to the backend environment, then try again.")
-    if adaption_pipeline.read_state().get("status") == "running":
+    if adaption_pipeline.is_active_run():
         raise HTTPException(409, "An Adaption run is already in progress.")
     adaption_pipeline.start_background(max_rows=body.max_rows, estimate_only=body.estimate_only)
     return {"started": True}
+
+
+@app.post("/api/adaption/reset")
+def adaption_reset():
+    if adaption_pipeline.is_active_run():
+        raise HTTPException(409, "Cannot reset while an Adaption run is in progress.")
+    state = adaption_pipeline.reset_state()
+    return {"ok": True, "state": state}
 
 
 @app.post("/api/adaption/apply")

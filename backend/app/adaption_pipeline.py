@@ -47,10 +47,16 @@ Rules: "mixed" means a complaint the business partly fixed. Severity is 0 for pr
 5 when the customer lost money or was defrauded. Choose topic from: {TOPIC_IDS}."""
 
 _lock = threading.Lock()
+_active_thread: threading.Thread | None = None
 
 
 def configured() -> bool:
     return bool(config.ADAPTION_API_KEY)
+
+
+def is_active_run() -> bool:
+    global _active_thread
+    return _active_thread is not None and _active_thread.is_alive()
 
 
 def read_state() -> dict:
@@ -66,6 +72,17 @@ def _write_state(**kw) -> dict:
     state = {**read_state(), **kw, "updated_at": utcnow().isoformat()}
     config.ADAPTION_STATE_FILE.write_text(json.dumps(state, indent=2, default=str))
     return state
+
+
+def reset_state() -> dict:
+    if is_active_run():
+        raise RuntimeError("Cannot reset while an Adaption run is actively in progress.")
+    if _lock.locked():
+        try:
+            _lock.release()
+        except RuntimeError:
+            pass
+    return _write_state(status="idle", step="Idle", error=None, dataset_id=None)
 
 
 def cached_results() -> dict:
@@ -88,7 +105,19 @@ def active_adaption_count() -> int:
 def status() -> dict:
     cache = cached_results()
     state = read_state()
-    is_running = state.get("status") == "running" or _lock.locked()
+    active = is_active_run()
+
+    # Self-heal orphaned run state: if disk state says "running" but no thread is alive,
+    # the process was restarted, reloaded, or crashed during execution.
+    if state.get("status") == "running" and not active:
+        log.warning("Detected orphaned Adaption run state. Healing to failed/interrupted.")
+        state = _write_state(
+            status="failed",
+            step="Interrupted",
+            error="Previous run was interrupted when the backend service restarted or timed out.",
+        )
+
+    is_running = active or (_lock.locked() and state.get("status") == "running")
     results = cache.get("results", [])
     enriched_count = len([r for r in results if r.get("engine") == "adaption"])
     fallback_count = len([r for r in results if r.get("engine") != "adaption"])
@@ -170,10 +199,15 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
         raise RuntimeError("Set ADAPTION_API_KEY to run the Adaption pipeline.")
     if not _lock.acquire(blocking=False):
         raise RuntimeError("An Adaption run is already in progress.")
+    temp_path: str | None = None
     try:
         from adaption import Adaption
+        import httpx
 
-        client = Adaption(api_key=config.ADAPTION_API_KEY)
+        client = Adaption(
+            api_key=config.ADAPTION_API_KEY,
+            timeout=httpx.Timeout(connect=15.0, read=120.0, write=120.0, pool=30.0),
+        )
         _write_state(status="running", step="Collecting unique reviews", started_at=utcnow().isoformat(),
                      error=None)
 
@@ -193,22 +227,26 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
         w.writerow(["review", "category"])
         for t in texts:
             w.writerow([t, cat_of[t]])
-        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as fh:
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False, encoding="utf-8") as fh:
             fh.write(buf.getvalue())
-            path = fh.name
+            temp_path = fh.name
 
-        _write_state(step=f"Uploading {len(texts)} unique reviews")
-        up = client.datasets.upload_file(path, name=f"insightflow-feedback-{int(time.time())}")
+        _write_state(step=f"Uploading {len(texts)} unique reviews to Adaption")
+        up = client.datasets.upload_file(temp_path, name=f"insightflow-feedback-{int(time.time())}")
         dataset_id = up.dataset_id
-        _write_state(dataset_id=dataset_id, step="Waiting for the upload to be processed")
+        _write_state(dataset_id=dataset_id, step="Processing uploaded dataset")
 
-        for _ in range(90):
+        for i in range(90):
             st = client.datasets.get_status(dataset_id)
-            if st.status in ("awaiting_input", "succeeded"):
+            if st.status in ("awaiting_input", "succeeded", "ready"):
                 break
             if st.status == "failed":
-                raise RuntimeError(f"Upload failed: {st.error_data.message if st.error_data else 'unknown'}")
+                err_msg = st.error_data.message if st.error_data else "unknown error"
+                raise RuntimeError(f"Upload processing failed: {err_msg}")
+            _write_state(step=f"Processing dataset ({st.status}, {i * 2}s)")
             time.sleep(2)
+        else:
+            raise RuntimeError("Dataset upload processing timed out after 180 seconds")
 
         adapt_kwargs = dict(
             column_mapping={"prompt": "review", "context": ["category"]},
@@ -218,34 +256,51 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
                             "safety_categories": ["harassment", "hate", "violence"]},
             training_type="instruction_dataset",
         )
+        _write_state(step="Requesting cost estimate")
         est = client.datasets.adapt(dataset_id, estimate=True, **adapt_kwargs)
         estimate = {"credits": est.estimated_credits_consumed, "minutes": est.estimated_minutes}
         _write_state(estimate=estimate, step="Cost estimate ready")
         if estimate_only:
-            _write_state(status="idle", step="Estimate only")
+            _write_state(status="idle", step="Estimate ready")
             return {"dataset_id": dataset_id, "estimate": estimate}
 
-        _write_state(step="Adapting: Adaption is analyzing each review")
+        _write_state(step="Submitting adaptation job to Adaption")
         client.datasets.adapt(dataset_id, job_specification={"idempotency_key": f"insightflow-{dataset_id}"},
                               **adapt_kwargs)
-        final = client.datasets.wait_for_completion(dataset_id, timeout=3600)
-        if final.status != "succeeded":
-            msg = final.error_data.message if final.error_data else "unknown error"
-            raise RuntimeError(f"Adaption run failed: {msg}")
 
-        _write_state(step="Reading the quality evaluation")
+        _write_state(step="Adapting: running AI analysis on reviews")
+        start_wait = time.monotonic()
+        timeout_seconds = 1800  # 30 minutes
+        while time.monotonic() - start_wait < timeout_seconds:
+            st = client.datasets.get_status(dataset_id)
+            if st.status == "succeeded":
+                break
+            if st.status == "failed":
+                msg = st.error_data.message if st.error_data else "unknown error"
+                raise RuntimeError(f"Adaption run failed: {msg}")
+            elapsed = int(time.monotonic() - start_wait)
+            prog_text = f" ({st.progress}%)" if getattr(st, "progress", None) is not None else ""
+            _write_state(step=f"Adapting reviews: {st.status}{prog_text} ({elapsed}s)")
+            time.sleep(3)
+        else:
+            raise RuntimeError("Adaption run timed out after 30 minutes")
+
+        _write_state(step="Reading quality evaluation")
         evaluation = None
         try:
-            ev = client.datasets.wait_for_evaluation(dataset_id, timeout=600)
+            ev = client.datasets.wait_for_evaluation(dataset_id, timeout=120)
             if ev.quality:
                 evaluation = {"status": ev.status, **ev.quality.model_dump()}
             else:
                 evaluation = {"status": ev.status}
         except Exception as exc:  # evaluation is a bonus, never block the run on it
-            evaluation = {"status": "unavailable", "detail": str(exc)[:200]}
+            log.warning("Evaluation skipped or timed out: %s", exc)
+            evaluation = {"status": "unavailable", "detail": "Evaluation timed out or skipped"}
 
-        _write_state(step="Downloading the adapted dataset")
-        content = client.datasets.download(dataset_id, file_format="csv").read().decode("utf-8")
+        _write_state(step="Downloading adapted dataset")
+        download_resp = client.datasets.download(dataset_id, file_format="csv", timeout=120.0)
+        content = download_resp.read().decode("utf-8")
+        _write_state(step="Parsing and merging results")
         reader = csv.DictReader(io.StringIO(content))
         cols = reader.fieldnames or []
         prompt_col = _pick_col(cols, "prompt", "review", "instruction", "input")
@@ -280,15 +335,26 @@ def run_pipeline(max_rows: int | None = None, estimate_only: bool = False) -> di
             "results": results,
         }
         config.ADAPTION_RESULTS_FILE.write_text(json.dumps(payload, indent=2))
+        _write_state(step="Applying results to database")
         applied = apply_cached_results()
         _write_state(status="succeeded", step="Done", finished_at=utcnow().isoformat(),
                      evaluation=evaluation, enriched=applied)
         return payload
     except Exception as exc:
         log.exception("Adaption pipeline failed")
-        _write_state(status="failed", step="Failed", error=str(exc)[:500])
+        err_msg = str(exc)
+        if config.ADAPTION_API_KEY and config.ADAPTION_API_KEY in err_msg:
+            err_msg = err_msg.replace(config.ADAPTION_API_KEY, "[REDACTED]")
+        _write_state(status="failed", step="Failed", error=err_msg[:400])
         raise
     finally:
+        if temp_path:
+            try:
+                import os
+                if os.path.exists(temp_path):
+                    os.unlink(temp_path)
+            except Exception:
+                pass
         _lock.release()
 
 
@@ -319,6 +385,10 @@ def apply_cached_results() -> int:
 
 
 def start_background(max_rows: int | None = None, estimate_only: bool = False) -> None:
+    global _active_thread
+    if is_active_run():
+        raise RuntimeError("An Adaption run is already in progress.")
+
     def _run():
         try:
             run_pipeline(max_rows=max_rows, estimate_only=estimate_only)
@@ -329,4 +399,5 @@ def start_background(max_rows: int | None = None, estimate_only: bool = False) -
 
             bump()
 
-    threading.Thread(target=_run, daemon=True).start()
+    _active_thread = threading.Thread(target=_run, daemon=True, name="adaption-worker")
+    _active_thread.start()

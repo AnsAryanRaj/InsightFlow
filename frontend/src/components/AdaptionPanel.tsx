@@ -132,9 +132,24 @@ export default function AdaptionPanel({ onDone }: { onDone?: () => void }) {
               </p>
             )}
             {data?.state.status === "failed" && data.state.error && (
-              <p role="alert" className="mt-4 rounded-lg bg-neg/30 px-3 py-2 text-sm">
-                Last run failed: {data.state.error}
-              </p>
+              <div role="alert" className="mt-4 rounded-lg bg-neg/30 p-3 text-sm">
+                <p className="font-semibold text-cream">Run stopped or failed:</p>
+                <p className="mt-1 text-cream/90">{data.state.error}</p>
+                <button
+                  type="button"
+                  className="mt-2 rounded bg-cream/10 px-2.5 py-1 text-xs font-medium text-cream hover:bg-cream/20"
+                  onClick={async () => {
+                    try {
+                      await api("/api/adaption/reset", { method: "POST" });
+                      reload();
+                    } catch (e) {
+                      setError((e as Error).message);
+                    }
+                  }}
+                >
+                  Dismiss error
+                </button>
+              </div>
             )}
             {est && !running && (
               <p className="mt-4 text-sm text-cream/80">
